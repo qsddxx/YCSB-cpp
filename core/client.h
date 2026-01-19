@@ -19,7 +19,11 @@
 #include "utils/utils.h"
 
 namespace ycsbc {
-
+inline void DoTaskSync(ycsbc::DB *db, bool init_db, bool cleanup_db,DBTaskPublisher* publisher,int i,AcknowledgedCounterGenerator* counter,bool is_loading,int producer_num)
+{
+  (*(publisher->DBList[i])).DoTaskSync(init_db,cleanup_db,&publisher->TaskList,counter,is_loading,producer_num);
+  
+}
 inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops, bool is_loading,
                         bool init_db, bool cleanup_db, utils::CountDownLatch *latch, utils::RateLimiter *rlim) {
 

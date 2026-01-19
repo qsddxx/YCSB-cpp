@@ -3,9 +3,9 @@
 
 cmake_minimum_required(VERSION 3.10)
 project(ycsb-cpp LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
-set(CMAKE_BUILD_TYPE Release)
+#set(CMAKE_BUILD_TYPE Release)
 set(CompilerFlags
         CMAKE_CXX_FLAGS
         CMAKE_CXX_FLAGS_DEBUG
@@ -14,23 +14,55 @@ set(CompilerFlags
         CMAKE_C_FLAGS_DEBUG
         CMAKE_C_FLAGS_RELEASE
         )
-
+add_compile_options(-Wall)
+add_compile_options(-Werror)
 if(MSVC)
     foreach(CompilerFlag ${CompilerFlags})
         string(REPLACE "/MD" "/MT" ${CompilerFlag} "${${CompilerFlag}}")
     endforeach()
 endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|i386|i686)$")
+    set(SUPPORT_SSE42 TRUE)
+else()
+    set(SUPPORT_SSE42 FALSE)
+    message(STATUS "CPU architecture ${CMAKE_SYSTEM_PROCESSOR} does not support SSE4.2, skipping")
+endif()
 
-option(BIND_ROCKSDB "build with rocksdb" OFF)
+if(SUPPORT_SSE42)
+    include(CheckCXXCompilerFlag)
+    set(SSE42_FLAG "")
+    
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        CHECK_CXX_COMPILER_FLAG("-msse4.2" COMPILER_SUPPORTS_SSE42)
+        if(COMPILER_SUPPORTS_SSE42)
+            set(SSE42_FLAG "-msse4.2")
+            message(STATUS "SSE4.2 enabled for GCC/Clang with flag: ${SSE42_FLAG}")
+        else()
+            message(WARNING "GCC/Clang does not support -msse4.2, SSE42 disabled")
+        endif()
+    endif()
+    
+    if(MSVC)
+        if(CMAKE_CL_64)
+            set(SSE42_FLAG "/arch:SSE2")
+            message(STATUS "SSE4.2 enabled for MSVC x64 with flag: ${SSE42_FLAG}")
+        else()
+            message(WARNING "MSVC 32-bit does not recommend SSE4.2, switch to x64")
+        endif()
+    endif()
+endif()
+option(BIND_ROCKSDB "build with rocksdb" ON)
 option(BIND_LMDB "build with lmdb" OFF)
 option(BIND_LEVELDB "build with leveldb" OFF)
 option(BIND_WIREDTIGER "build with wiredtiger" OFF)
+# ========== 新增：添加folly启用选项 ==========
+option(USE_FOLLY "Build with Folly library" ON)
 
 option(WITH_ZLIB "linking YCSB with zlib; needed by HdrHISTOGRAM, DO NOT TURN OFF" ON)
-option(WITH_LZ4 "linking YCSB with lz4" OFF)
-option(WITH_SNAPPY "linking YCSB with snappy" OFF)
-option(WITH_ZSTD "linking YCSB with zstd" OFF)
-option(WITH_BZ2 "linking YCSB with bzip2" OFF)
+option(WITH_LZ4 "linking YCSB with lz4" ON)
+option(WITH_SNAPPY "linking YCSB with snappy" ON)
+option(WITH_ZSTD "linking YCSB with zstd" ON)
+option(WITH_BZ2 "linking YCSB with bzip2" ON)
 
 file(GLOB_RECURSE YCSB_CORE_SRC "core/*.cc")
 
@@ -38,7 +70,20 @@ include(FindThreads)
 
 add_executable(ycsb ${YCSB_CORE_SRC})
 target_include_directories(ycsb PRIVATE ${PROJECT_SOURCE_DIR})
-
+# ========== 新增：链接线程库（folly依赖） ==========
+if(NOT TARGET uring::uring)
+    add_library(uring::uring INTERFACE IMPORTED)
+    target_link_libraries(uring::uring INTERFACE ${URING_LIBRARIES})
+    target_include_directories(uring::uring INTERFACE ${URING_INCLUDE_DIRS})
+endif()
+target_link_libraries(ycsb PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+find_package(Gflags CONFIG REQUIRED)
+set_target_properties(gflags_shared PROPERTIES
+        MAP_IMPORTED_CONFIG_DEBUG Release
+)
+include("/usr/local/lib/cmake/gflags/gflags-nonamespace-targets.cmake")
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(URING REQUIRED liburing)
 if (BIND_ROCKSDB)
     message(STATUS "BIND_ROCKSDB - ON")
     set(WITH_ZLIB ON)
@@ -48,6 +93,10 @@ if (BIND_ROCKSDB)
 
     find_package(RocksDB CONFIG)
     if(RocksDB_FOUND)
+        get_target_property(ROCKSDB_LIB_PATH RocksDB::rocksdb LOCATION)
+        get_target_property(ROCKSDB_INC_PATH RocksDB::rocksdb INTERFACE_INCLUDE_DIRECTORIES)
+        message(STATUS "Bound RocksDB Library Path: ${ROCKSDB_LIB_PATH}")
+        message(STATUS "Bound RocksDB Include Path: ${ROCKSDB_INC_PATH}")
         if(MSVC)
             target_link_libraries(ycsb PRIVATE RocksDB::rocksdb rpcrt4.lib)
         else()
@@ -57,6 +106,8 @@ if (BIND_ROCKSDB)
         message(STATUS "Try to find rocksdb library using find_library")
         find_library(ROCKSDB_LIB rocksdb REQUIRED)
         find_path(ROCKSDB_INCLUDE_DIR "rocksdb/db.h" REQUIRED)
+        message(STATUS "Bound RocksDB Library Path: ${ROCKSDB_LIB}")
+        message(STATUS "Bound RocksDB Include Path: ${ROCKSDB_INCLUDE_DIR}")
         target_link_libraries(ycsb PRIVATE ${ROCKSDB_LIB})
         target_include_directories(ycsb PRIVATE ${ROCKSDB_INCLUDE_DIR})
     endif()
@@ -67,6 +118,7 @@ if (BIND_ROCKSDB)
 else()
     message(STATUS "BIND_ROCKSDB - OFF")
 endif()
+
 
 if (BIND_LMDB)
     message(STATUS "BIND_LMDB - ON")
@@ -198,6 +250,54 @@ else()
     message(STATUS "WITH_BZ2 - OFF")
 endif()
 
+# ========== 新增：Folly库查找与链接逻辑 ==========
+if(USE_FOLLY)
+    message(STATUS "USE_FOLLY - ON")
+    
+    # 优先通过config模式查找folly（推荐folly安装时带cmake配置）
+    find_package(Folly CONFIG)
+    if(Folly_FOUND)
+        target_link_libraries(ycsb PRIVATE Folly::folly)
+        message(STATUS "Found Folly via CMake config")
+    else()
+        # 手动查找folly库和头文件
+        message(STATUS "Try to find Folly via find_library")
+        find_library(FOLLY_LIB folly REQUIRED
+            HINTS /usr/local/lib /usr/lib $ENV{FOLLY_ROOT}/lib)
+        find_path(FOLLY_INCLUDE_DIR "folly/folly-config.h" REQUIRED
+            HINTS /usr/local/include /usr/include $ENV{FOLLY_ROOT}/include)
+        
+        # 添加folly头文件目录
+        target_include_directories(ycsb PRIVATE ${FOLLY_INCLUDE_DIR})
+        # 链接folly库
+        target_link_libraries(ycsb PRIVATE ${FOLLY_LIB})
+        
+        # Folly依赖的基础库（按需添加）
+        find_library(GFLAGS_LIB gflags)
+        if(GFLAGS_LIB)
+            target_link_libraries(ycsb PRIVATE ${GFLAGS_LIB})
+        endif()
+        find_library(GLOG_LIB glog)
+        if(GLOG_LIB)
+            target_link_libraries(ycsb PRIVATE ${GLOG_LIB})
+        endif()
+        find_library(EVENT_LIB event)
+        if(EVENT_LIB)
+            target_link_libraries(ycsb PRIVATE ${EVENT_LIB})
+        endif()
+        
+        message(STATUS "Found Folly: lib=${FOLLY_LIB}, include=${FOLLY_INCLUDE_DIR}")
+    endif()
+    
+    # Folly需要的编译选项（如异常支持）
+    target_compile_options(ycsb PRIVATE -fexceptions)
+else()
+    message(STATUS "USE_FOLLY - OFF")
+endif()
+target_compile_options(ycsb
+        PRIVATE  # 仅当前目标生效，不传递给依赖
+        ${SSE42_FLAG}
+    )
 add_subdirectory(HdrHistogram_c)
 include_directories(HdrHistogram_c/include)
 add_compile_definitions(HDRMEASUREMENT)

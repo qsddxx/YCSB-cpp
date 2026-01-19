@@ -21,7 +21,7 @@
 
 namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
-  const std::string PROP_NAME_DEFAULT = "";
+  const std::string PROP_NAME_DEFAULT = "/home/liyixian/test";
 
   const std::string PROP_FORMAT = "rocksdb.format";
   const std::string PROP_FORMAT_DEFAULT = "single";
@@ -104,9 +104,6 @@ namespace {
   const std::string PROP_FS_URI = "rocksdb.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
-  const std::string PROP_SYNC = "rocksdb.sync";
-  const std::string PROP_SYNC_DEFAULT = "false";
-
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
 #if ROCKSDB_MAJOR < 8
@@ -120,7 +117,6 @@ std::vector<rocksdb::ColumnFamilyHandle *> RocksdbDB::cf_handles_;
 rocksdb::DB *RocksdbDB::db_ = nullptr;
 int RocksdbDB::ref_cnt_ = 0;
 std::mutex RocksdbDB::mu_;
-rocksdb::WriteOptions RocksdbDB::wopt_;
 
 void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
@@ -368,9 +364,6 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {
       opt->OptimizeLevelStyleCompaction();
     }
-    if (props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true") {
-      wopt_.sync = true;
-    }
   }
 }
 
@@ -434,107 +427,154 @@ void RocksdbDB::DeserializeRow(std::vector<Field> &values, const std::string &da
   DeserializeRow(values, p, lim);
 }
 
-DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &key,
-                                 const std::vector<std::string> *fields,
-                                 std::vector<Field> &result) {
-  std::string data;
-  rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
-  if (s.IsNotFound()) {
-    return kNotFound;
-  } else if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
-  }
-  if (fields != nullptr) {
-    DeserializeRowFilter(result, data, *fields);
-  } else {
-    DeserializeRow(result, data);
-    assert(result.size() == static_cast<size_t>(fieldcount_));
-  }
-  return kOK;
-}
-
-DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
-                                 const std::vector<std::string> *fields,
-                                 std::vector<std::vector<Field>> &result) {
-  rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
-  db_iter->Seek(key);
-  for (int i = 0; db_iter->Valid() && i < len; i++) {
-    std::string data = db_iter->value().ToString();
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
+DB::Status RocksdbDB::ReadSingle(const std::string &table, std::shared_ptr<std::string> key,
+                                 const std::shared_ptr<std::vector<std::string>> fields,
+                                 std::shared_ptr<std::vector<Field>> result,std::shared_ptr<Information> information) {
+  if(!async_test)
+  {
+    std::string data;
+    rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), *key, &data);
+    if (s.IsNotFound()) {
+      return kNotFound;
+    } else if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
+    }
     if (fields != nullptr) {
-      DeserializeRowFilter(values, data, *fields);
+      DeserializeRowFilter(*result, data, *fields);
     } else {
-      DeserializeRow(values, data);
-      assert(values.size() == static_cast<size_t>(fieldcount_));
+      DeserializeRow(*result, data);
+      assert((*result).size() == static_cast<size_t>(fieldcount_));
     }
-    db_iter->Next();
+    return kOK;
   }
-  delete db_iter;
-  return kOK;
+  else
+  {
+    return kOK;
+  }
 }
 
-DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
-                                   std::vector<Field> &values) {
-  std::string data;
-  rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
-  if (s.IsNotFound()) {
-    return kNotFound;
-  } else if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
-  }
-  std::vector<Field> current_values;
-  DeserializeRow(current_values, data);
-  assert(current_values.size() == static_cast<size_t>(fieldcount_));
-  for (Field &new_field : values) {
-    bool found MAYBE_UNUSED = false;
-    for (Field &cur_field : current_values) {
-      if (cur_field.name == new_field.name) {
-        found = true;
-        cur_field.value = new_field.value;
-        break;
+DB::Status RocksdbDB::ScanSingle(const std::string &table, std::shared_ptr<std::string> key, int len,
+                                 const std::shared_ptr<std::vector<std::string>> fields,
+                                 std::shared_ptr<std::vector<std::vector<Field>>> result,std::shared_ptr<Information> information) {
+  if(!async_test)
+  {
+    rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
+    db_iter->Seek(*key);
+    for (int i = 0; db_iter->Valid() && i < len; i++) {
+      std::string data = db_iter->value().ToString();
+      result->push_back(std::vector<Field>());
+      std::vector<Field> &values = result->back();
+      if (fields != nullptr) {
+        DeserializeRowFilter(values, data, *fields);
+      } else {
+        DeserializeRow(values, data);
+        assert(values.size() == static_cast<size_t>(fieldcount_));
       }
+      db_iter->Next();
     }
-    assert(found);
+    delete db_iter;
+    return kOK;
   }
-
-  data.clear();
-  SerializeRow(current_values, data);
-  s = db_->Put(wopt_, key, data);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+  else
+  {
+    return kOK;
   }
-  return kOK;
 }
 
-DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &key,
-                                  std::vector<Field> &values) {
-  std::string data;
-  SerializeRow(values, data);
-  rocksdb::Status s = db_->Merge(wopt_, key, data);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Merge: ") + s.ToString());
+DB::Status RocksdbDB::UpdateSingle(const std::string &table, std::shared_ptr<std::string> key,
+                                   std::shared_ptr<std::vector<Field>> values,std::shared_ptr<Information> information) {
+  if(!async_test)
+  {
+    std::string data;
+    rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), *key, &data);
+    if (s.IsNotFound()) {
+      return kNotFound;
+    } else if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
+    }
+    std::vector<Field> current_values;
+    DeserializeRow(current_values, data);
+    assert(current_values.size() == static_cast<size_t>(fieldcount_));
+    for (Field &new_field : (*values)) {
+      bool found MAYBE_UNUSED = false;
+      for (Field &cur_field : current_values) {
+        if (cur_field.name == new_field.name) {
+          found = true;
+          cur_field.value = new_field.value;
+          break;
+        }
+      }
+      assert(found);
+    }
+    rocksdb::WriteOptions wopt;
+
+    data.clear();
+    SerializeRow(current_values, data);
+    s = db_->Put(wopt, *key, data);
+    if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+    }
+    return kOK;
   }
-  return kOK;
+  else
+  {
+    return kOK;
+  }
 }
 
-DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &key,
-                                   std::vector<Field> &values) {
-  std::string data;
-  SerializeRow(values, data);
-  rocksdb::Status s = db_->Put(wopt_, key, data);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+DB::Status RocksdbDB::MergeSingle(const std::string &table, std::shared_ptr<std::string> key,
+                                  std::shared_ptr<std::vector<Field>> values,std::shared_ptr<Information> information) {
+  if(!async_test)
+  {
+    std::string data;
+    SerializeRow(*values, data);
+    rocksdb::WriteOptions wopt;
+    rocksdb::Status s = db_->Merge(wopt, *key, data);
+    if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Merge: ") + s.ToString());
+    }
+    return kOK;
   }
-  return kOK;
+  else
+  {
+    return kOK;
+  }
 }
 
-DB::Status RocksdbDB::DeleteSingle(const std::string &table, const std::string &key) {
-  rocksdb::Status s = db_->Delete(wopt_, key);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Delete: ") + s.ToString());
+DB::Status RocksdbDB::InsertSingle(const std::string &table, std::shared_ptr<std::string> key,
+                                   std::shared_ptr<std::vector<Field>> values,std::shared_ptr<Information> information) {
+  
+  if(!async_test)
+  {
+    std::string data;
+    SerializeRow(*values, data);
+    rocksdb::WriteOptions wopt;
+    rocksdb::Status s = db_->Put(wopt, *key, data);
+    if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+    }
+    return kOK;
   }
-  return kOK;
+  else
+  {
+    return kOK;
+  }
+}
+
+DB::Status RocksdbDB::DeleteSingle(const std::string &table, std::shared_ptr<std::string> key,std::shared_ptr<Information> information) {
+  if(!async_test)
+  {
+    rocksdb::WriteOptions wopt;
+    rocksdb::Status s = db_->Delete(wopt, *key);
+    if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Delete: ") + s.ToString());
+    }
+    return kOK;
+  }
+  else
+  {
+    return kOK;
+  }
 }
 
 DB *NewRocksdbDB() {

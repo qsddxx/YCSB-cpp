@@ -32,6 +32,11 @@ class CountDownLatch {
       cv_.notify_all();
     }
   }
+  void NotifyAll()
+  {
+    count_=0;
+    cv_.notify_all();
+  }
  private:
   int count_;
   std::mutex mu_;

@@ -8,7 +8,8 @@
 //
 
 #include "uniform_generator.h"
-#include "zipfian_generator.h"
+#include "multi_zipfian_generator.h"
+//#include "zipfian_generator.h"
 #include "scrambled_zipfian_generator.h"
 #include "skewed_latest_generator.h"
 #include "const_generator.h"
@@ -22,7 +23,7 @@
 
 using ycsbc::CoreWorkload;
 using std::string;
-
+/*
 const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "INSERT",
   "READ",
@@ -37,7 +38,7 @@ const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "READMODIFYWRITE-FAILED",
   "DELETE-FAILED"
 };
-
+*/
 const string CoreWorkload::TABLENAME_PROPERTY = "table";
 const string CoreWorkload::TABLENAME_DEFAULT = "usertable";
 
@@ -77,9 +78,6 @@ const string CoreWorkload::REQUEST_DISTRIBUTION_DEFAULT = "uniform";
 const string CoreWorkload::ZERO_PADDING_PROPERTY = "zeropadding";
 const string CoreWorkload::ZERO_PADDING_DEFAULT = "1";
 
-const std::string CoreWorkload::KEY_PREFIX_PROPERTY = "keyprefix";
-const std::string CoreWorkload::KEY_PREFIX_DEFAULT = "user";
-
 const string CoreWorkload::MIN_SCAN_LENGTH_PROPERTY = "minscanlength";
 const string CoreWorkload::MIN_SCAN_LENGTH_DEFAULT = "1";
 
@@ -111,6 +109,7 @@ void CoreWorkload::Init(const utils::Properties &p) {
   field_count_ = std::stoi(p.GetProperty(FIELD_COUNT_PROPERTY, FIELD_COUNT_DEFAULT));
   field_prefix_ = p.GetProperty(FIELD_NAME_PREFIX, FIELD_NAME_PREFIX_DEFAULT);
   field_len_generator_ = GetFieldLenGenerator(p);
+  std::cout<<"Field count: "<<field_count_<<std::endl;
 
   double read_proportion = std::stod(p.GetProperty(READ_PROPORTION_PROPERTY,
                                                    READ_PROPORTION_DEFAULT));
@@ -133,7 +132,6 @@ void CoreWorkload::Init(const utils::Properties &p) {
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
 
   zero_padding_ = std::stoi(p.GetProperty(ZERO_PADDING_PROPERTY, ZERO_PADDING_DEFAULT));
-  key_prefix_ = p.GetProperty(KEY_PREFIX_PROPERTY, KEY_PREFIX_DEFAULT);
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
@@ -148,18 +146,23 @@ void CoreWorkload::Init(const utils::Properties &p) {
 
 
   if (read_proportion > 0) {
+    //op_chooser_.load()->AddValue(READ, read_proportion);
     op_chooser_.AddValue(READ, read_proportion);
   }
   if (update_proportion > 0) {
+    //op_chooser_.load()->AddValue(UPDATE, update_proportion);
     op_chooser_.AddValue(UPDATE, update_proportion);
   }
   if (insert_proportion > 0) {
+    //op_chooser_.load()->AddValue(INSERT, insert_proportion);
     op_chooser_.AddValue(INSERT, insert_proportion);
   }
   if (scan_proportion > 0) {
+    //op_chooser_.load()->AddValue(SCAN, scan_proportion);
     op_chooser_.AddValue(SCAN, scan_proportion);
   }
   if (readmodifywrite_proportion > 0) {
+    //op_chooser_.load()->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
     op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
@@ -185,7 +188,13 @@ void CoreWorkload::Init(const utils::Properties &p) {
     }
   } else if (request_dist == "latest") {
     key_chooser_ = new SkewedLatestGenerator(*transaction_insert_key_sequence_);
-  } else {
+  } else if(request_dist == "multizip")
+  {
+    int op_count = std::stoi(p.GetProperty(OPERATION_COUNT_PROPERTY));
+    int new_keys = (int)(op_count * insert_proportion * 2); // a fudge factor
+    multi_zipfian=true;
+    key_chooser_=new AutoHotZoneSelector(0, record_count_ + new_keys - 1,2,2,0.9,0.9);
+  }else {
     throw utils::Exception("Unknown request distribution: " + request_dist);
   }
 
@@ -205,6 +214,7 @@ ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
   string field_len_dist = p.GetProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY,
                                         FIELD_LENGTH_DISTRIBUTION_DEFAULT);
   int field_len = std::stoi(p.GetProperty(FIELD_LENGTH_PROPERTY, FIELD_LENGTH_DEFAULT));
+  std::cout<<"Field length: "<<field_len<<std::endl;
   if(field_len_dist == "constant") {
     return new ConstGenerator(field_len);
   } else if(field_len_dist == "uniform") {
@@ -220,12 +230,20 @@ std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
   if (!ordered_inserts_) {
     key_num = utils::Hash(key_num);
   }
-  std::string prekey = key_prefix_;
+  std::string prekey = "user";
   std::string value = std::to_string(key_num);
   int fill = std::max(0, zero_padding_ - static_cast<int>(value.size()));
   return prekey.append(fill, '0').append(value);
 }
-
+std::shared_ptr<std::string> CoreWorkload::BuildKeyNamePtr(uint64_t key_num) {
+  if (!ordered_inserts_) {
+    key_num = utils::Hash(key_num);
+  }
+  std::string prekey = "user";
+  std::string value = std::to_string(key_num);
+  int fill = std::max(0, zero_padding_ - static_cast<int>(value.size()));
+  return std::make_shared<std::string>(prekey.append(fill, '0').append(value));
+}
 void CoreWorkload::BuildValues(std::vector<ycsbc::DB::Field> &values) {
   for (int i = 0; i < field_count_; ++i) {
     values.push_back(DB::Field());
@@ -248,10 +266,17 @@ void CoreWorkload::BuildSingleValue(std::vector<ycsbc::DB::Field> &values) {
   std::generate_n(std::back_inserter(field.value), len, [&]() { return byte_generator.Next(); } );
 }
 
-uint64_t CoreWorkload::NextTransactionKeyNum() {
+uint64_t CoreWorkload::NextTransactionKeyNum(OperationType op_type) {
   uint64_t key_num;
   do {
-    key_num = key_chooser_->Next();
+    if(multi_zipfian)
+    {
+      key_num = key_chooser_->Next(op_type);
+    }
+    else
+    {
+      key_num = key_chooser_->Next();
+    }
   } while (key_num > transaction_insert_key_sequence_->Last());
   return key_num;
 }
@@ -266,7 +291,35 @@ bool CoreWorkload::DoInsert(DB &db) {
   BuildValues(fields);
   return db.Insert(table_name_, key, fields) == DB::kOK;
 }
-
+void CoreWorkload::GenerateInsertTask(int task_num,std::vector<DB::Task>& task_list)
+{
+  task_list.resize(task_num);
+  //using Clock = std::chrono::high_resolution_clock;
+  //Clock::time_point time_=Clock::now();
+  for(int i=0;i<task_num;i++)
+  {
+    //auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+    //timer_ptr->SetStartTime(time_);
+    auto key_ptr=BuildKeyNamePtr(insert_key_sequence_->Next());
+    std::vector<DB::Field> fields;
+    BuildValues(fields);
+    auto fields_ptr=std::make_shared<std::vector<DB::Field>>(fields);
+    auto information=std::make_shared<Information>();
+    //information->counter=transaction_insert_key_sequence_;
+    information->is_loading=true;
+    task_list[i].information=information;
+    task_list[i].operation=INSERT;
+    task_list[i].key=std::move(key_ptr);
+    task_list[i].table=&table_name_;
+    task_list[i].values=std::move(fields_ptr);
+    //task_list[i].timer_=std::move(timer_ptr);
+  }
+  //Clock::time_point time1=Clock::now();
+  //for(int i=0;i<task_num;i++)
+  //{
+    //task_list[i].timer_->SetStartTime(time1);
+  //}
+}
 bool CoreWorkload::DoTransaction(DB &db) {
   DB::Status status;
   switch (op_chooser_.Next()) {
@@ -290,9 +343,41 @@ bool CoreWorkload::DoTransaction(DB &db) {
   }
   return (status == DB::kOK);
 }
-
+void CoreWorkload::GenerateTransactionTask(int task_num,std::vector<DB::Task>& task_list)
+{
+  task_list.resize(task_num);
+  using Clock = std::chrono::high_resolution_clock;
+  Clock::time_point time_=Clock::now();
+  for(int i=0;i<task_num;i++)
+  {
+    switch (op_chooser_.Next()) {
+      case READ:
+        GenerateTransactionReadTask(task_list[i],time_);
+        break;
+      case UPDATE:
+        GenerateTransactionUpdateTask(task_list[i],time_);
+        break;
+      case INSERT:
+        GenerateTransactionInsertTask(task_list[i],time_);
+        break;
+      case SCAN:
+        GenerateTransactionScanTask(task_list[i],time_);
+        break;
+      case READMODIFYWRITE:
+        GenerateTransactionReadModifyWriteTask(task_list[i],time_);
+        break;
+      default:
+        throw utils::Exception("Operation request is not recognized!");
+    }
+  }
+  //Clock::time_point time1=Clock::now();
+  //for(int i=0;i<task_num;i++)
+  //{
+    //task_list[i].timer_->SetStartTime(time1);
+  //}
+}
 DB::Status CoreWorkload::TransactionRead(DB &db) {
-  uint64_t key_num = NextTransactionKeyNum();
+  uint64_t key_num = NextTransactionKeyNum(OperationType::kRead);
   const std::string key = BuildKeyName(key_num);
   std::vector<DB::Field> result;
   if (!read_all_fields()) {
@@ -303,7 +388,35 @@ DB::Status CoreWorkload::TransactionRead(DB &db) {
     return db.Read(table_name_, key, NULL, result);
   }
 }
-
+void CoreWorkload::GenerateTransactionReadTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time)
+{
+  //auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+  //timer_ptr->SetStartTime(time);
+  uint64_t key_num = NextTransactionKeyNum();
+  auto key = BuildKeyNamePtr(key_num);
+  auto result=std::make_shared<std::vector<DB::Field>>();
+  if (!read_all_fields()) {
+    auto fields=std::make_shared<std::vector<std::string>>();
+    fields->push_back(NextFieldName());
+    task.operation=READ;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.result=std::move(result);
+    task.fields=std::move(fields);
+    //task.timer_=std::move(timer_ptr);
+  } else {
+    task.operation=READ;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.result=std::move(result);
+    task.fields=NULL;
+    //task.timer_=std::move(timer_ptr);
+  }
+  auto information=std::make_shared<Information>();
+  information->counter=transaction_insert_key_sequence_;
+  information->is_loading=false;
+  task.information=information;
+}
 DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
   const std::string key = BuildKeyName(key_num);
@@ -325,7 +438,59 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   }
   return db.Update(table_name_, key, values);
 }
+void CoreWorkload::GenerateTransactionReadModifyWriteTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time)
+{
+  //auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+  //timer_ptr->SetStartTime(time);
+  uint64_t key_num = NextTransactionKeyNum();
+  auto key = BuildKeyNamePtr(key_num);
+  auto result=std::make_shared<std::vector<DB::Field>>();
 
+  if (!read_all_fields())
+  {
+    std::vector<DB::Field> values;
+    if (write_all_fields())
+    {
+      BuildValues(values);
+    } else
+    {
+      BuildSingleValue(values);
+    }
+    auto values_ptr=std::make_shared<std::vector<DB::Field>>(values);
+    auto fields=std::make_shared<std::vector<std::string>>();
+    fields->push_back(NextFieldName());
+    task.operation=READMODIFYWRITE;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.result=std::move(result);
+    task.fields=std::move(fields);
+    //task.timer_=std::move(timer_ptr);
+    task.values=std::move(values_ptr);
+  }
+  else
+  {
+    std::vector<DB::Field> values;
+    if (write_all_fields())
+    {
+      BuildValues(values);
+    } else
+    {
+      BuildSingleValue(values);
+    }
+    auto values_ptr=std::make_shared<std::vector<DB::Field>>(values);
+    task.operation=READMODIFYWRITE;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.result=std::move(result);
+    task.fields=NULL;
+    //task.timer_=std::move(timer_ptr);
+    task.values=std::move(values_ptr);
+  }
+  auto information=std::make_shared<Information>();
+  information->counter=transaction_insert_key_sequence_;
+  information->is_loading=false;
+  task.information=information;
+}
 DB::Status CoreWorkload::TransactionScan(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
   const std::string key = BuildKeyName(key_num);
@@ -339,9 +504,43 @@ DB::Status CoreWorkload::TransactionScan(DB &db) {
     return db.Scan(table_name_, key, len, NULL, result);
   }
 }
-
-DB::Status CoreWorkload::TransactionUpdate(DB &db) {
+void CoreWorkload::GenerateTransactionScanTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time)
+{
+ // auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+  //timer_ptr->SetStartTime(time);
   uint64_t key_num = NextTransactionKeyNum();
+  auto key = BuildKeyNamePtr(key_num);
+  auto result=std::make_shared<std::vector<std::vector<DB::Field>>>();
+  int len = scan_len_chooser_->Next();
+  if (!read_all_fields())
+  {
+    auto fields=std::make_shared<std::vector<std::string>>();
+    fields->push_back(NextFieldName());
+    task.operation=SCAN;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.scan_result=std::move(result);
+    task.fields=std::move(fields);
+    //task.timer_=std::move(timer_ptr);
+    task.record_count=len;
+  }
+  else
+  {
+    task.operation=SCAN;
+    task.key=std::move(key);
+    task.table=&table_name_;
+    task.scan_result=std::move(result);
+    task.fields=NULL;
+    //task.timer_=std::move(timer_ptr);
+    task.record_count=len;
+  }
+  auto information=std::make_shared<Information>();
+  information->counter=transaction_insert_key_sequence_;
+  information->is_loading=false;
+  task.information=information;
+}
+DB::Status CoreWorkload::TransactionUpdate(DB &db) {
+  uint64_t key_num = NextTransactionKeyNum(OperationType::kWrite);
   const std::string key = BuildKeyName(key_num);
   std::vector<DB::Field> values;
   if (write_all_fields()) {
@@ -351,7 +550,32 @@ DB::Status CoreWorkload::TransactionUpdate(DB &db) {
   }
   return db.Update(table_name_, key, values);
 }
-
+void CoreWorkload::GenerateTransactionUpdateTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time)
+{
+  //auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+  //timer_ptr->SetStartTime(time);
+  uint64_t key_num = NextTransactionKeyNum();
+  auto key = BuildKeyNamePtr(key_num);
+  std::vector<DB::Field> values;
+  if (write_all_fields())
+  {
+    BuildValues(values);
+  }
+  else
+  {
+    BuildSingleValue(values);
+  }
+  auto values_ptr=std::make_shared<std::vector<DB::Field>>(values);
+  task.operation=UPDATE;
+  task.key=std::move(key);
+  task.table=&table_name_;
+  //task.timer_=std::move(timer_ptr);
+  task.values=std::move(values_ptr);
+  auto information=std::make_shared<Information>();
+  information->counter=transaction_insert_key_sequence_;
+  information->is_loading=false;
+  task.information=information;
+}
 DB::Status CoreWorkload::TransactionInsert(DB &db) {
   uint64_t key_num = transaction_insert_key_sequence_->Next();
   const std::string key = BuildKeyName(key_num);
@@ -361,5 +585,24 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   transaction_insert_key_sequence_->Acknowledge(key_num);
   return s;
 }
-
+void CoreWorkload::GenerateTransactionInsertTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time)
+{
+  //auto timer_ptr=std::make_shared<utils::Timer<uint64_t,std::nano>>();
+  //timer_ptr->SetStartTime(time);
+  uint64_t key_num = transaction_insert_key_sequence_->Next();
+  task.key_num=key_num;
+  auto key = BuildKeyNamePtr(key_num);
+  std::vector<DB::Field> values;
+  BuildValues(values);
+  auto values_ptr=std::make_shared<std::vector<DB::Field>>(values);
+  task.operation=INSERT;
+  task.key=std::move(key);
+  task.table=&table_name_;
+  //task.timer_=std::move(timer_ptr);
+  task.values=std::move(values_ptr);
+  auto information=std::make_shared<Information>();
+  information->counter=transaction_insert_key_sequence_;
+  information->is_loading=false;
+  task.information=information;
+}
 } // ycsbc

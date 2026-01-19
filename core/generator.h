@@ -12,11 +12,19 @@
 #include <cstdint>
 
 namespace ycsbc {
-
+enum class OperationType
+{
+  kRead,
+  kWrite
+};
 template <typename Value>
 class Generator {
  public:
   virtual Value Next() = 0;
+  virtual Value Next(OperationType op_type)
+  {
+    return Value{};
+  }
   virtual Value Last() = 0;
   virtual ~Generator() { }
 };

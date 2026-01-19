@@ -22,23 +22,9 @@
 
 namespace ycsbc {
 
-enum Operation {
-  INSERT = 0,
-  READ,
-  UPDATE,
-  SCAN,
-  READMODIFYWRITE,
-  DELETE,
-  INSERT_FAILED,
-  READ_FAILED,
-  UPDATE_FAILED,
-  SCAN_FAILED,
-  READMODIFYWRITE_FAILED,
-  DELETE_FAILED,
-  MAXOPTYPE
-};
 
-extern const char *kOperationString[MAXOPTYPE];
+
+//extern const char *kOperationString[MAXOPTYPE];
 
 class CoreWorkload {
  public:
@@ -126,12 +112,6 @@ class CoreWorkload {
   static const std::string ZERO_PADDING_DEFAULT;
 
   ///
-  /// Key name prefix.
-  ///
-  static const std::string KEY_PREFIX_PROPERTY;
-  static const std::string KEY_PREFIX_DEFAULT;
-
-  ///
   /// The name of the property for the min scan length (number of records).
   ///
   static const std::string MIN_SCAN_LENGTH_PROPERTY;
@@ -181,8 +161,9 @@ class CoreWorkload {
   virtual void Init(const utils::Properties &p);
 
   virtual bool DoInsert(DB &db);
+  void GenerateInsertTask(int task_num,std::vector<DB::Task>& task_list);
   virtual bool DoTransaction(DB &db);
-
+  void GenerateTransactionTask(int task_num,std::vector<DB::Task>& task_list);
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
 
@@ -191,6 +172,8 @@ class CoreWorkload {
       field_len_generator_(nullptr), key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
       transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0) {
+        //DiscreteGenerator<Operation>* new_chooser=new DiscreteGenerator<Operation>();
+        //op_chooser_.store(std::move(new_chooser));
   }
 
   virtual ~CoreWorkload() {
@@ -201,21 +184,43 @@ class CoreWorkload {
     delete insert_key_sequence_;
     delete transaction_insert_key_sequence_;
   }
+  AcknowledgedCounterGenerator * GetCounterGenerator()
+  {
+    return transaction_insert_key_sequence_;
+  }
+  void UpdateOperationProportions(double read_proportion=0, double update_proportion=0,   
+                                            double insert_proportion=0, double scan_proportion=0,   
+                                            double readmodifywrite_proportion=0) {  
+  DiscreteGenerator<Operation>* new_chooser = new DiscreteGenerator<Operation>();  
+  new_chooser->AddValue(READ, read_proportion);  
+  new_chooser->AddValue(UPDATE, update_proportion);
+  new_chooser->AddValue(INSERT, insert_proportion);
+  new_chooser->AddValue(SCAN, scan_proportion);
+  new_chooser->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
+  //DiscreteGenerator<Operation>* old_chooser = op_chooser_.exchange(new_chooser);
+  //delete old_chooser;  
+}
 
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
   std::string BuildKeyName(uint64_t key_num);
+  std::shared_ptr<std::string> BuildKeyNamePtr(uint64_t key_num);
   void BuildValues(std::vector<DB::Field> &values);
   void BuildSingleValue(std::vector<DB::Field> &update);
 
-  uint64_t NextTransactionKeyNum();
+  uint64_t NextTransactionKeyNum(OperationType op_type=OperationType::kRead);
   std::string NextFieldName();
 
   DB::Status TransactionRead(DB &db);
+  void GenerateTransactionReadTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time);
   DB::Status TransactionReadModifyWrite(DB &db);
+  void GenerateTransactionReadModifyWriteTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time);
   DB::Status TransactionScan(DB &db);
+  void GenerateTransactionScanTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time);
   DB::Status TransactionUpdate(DB &db);
+  void GenerateTransactionUpdateTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time);
   DB::Status TransactionInsert(DB &db);
+  void GenerateTransactionInsertTask(DB::Task& task,std::chrono::high_resolution_clock::time_point time);
 
   std::string table_name_;
   int field_count_;
@@ -223,6 +228,7 @@ class CoreWorkload {
   bool read_all_fields_;
   bool write_all_fields_;
   Generator<uint64_t> *field_len_generator_;
+  //std::atomic<DiscreteGenerator<Operation>*> op_chooser_;
   DiscreteGenerator<Operation> op_chooser_;
   Generator<uint64_t> *key_chooser_; // transaction key gen
   Generator<uint64_t> *field_chooser_;
@@ -232,7 +238,7 @@ class CoreWorkload {
   bool ordered_inserts_;
   size_t record_count_;
   int zero_padding_;
-  std::string key_prefix_;
+  bool multi_zipfian=false;
 };
 
 } // ycsbc

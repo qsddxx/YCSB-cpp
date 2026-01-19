@@ -25,7 +25,7 @@ class RateLimiter {
   RateLimiter(int64_t r, int64_t b) : r_(r * TOKEN_PRECISION), b_(b * TOKEN_PRECISION), tokens_(0), last_(Clock::now()) {}
 
   inline void Consume(int64_t n) {
-    std::unique_lock<std::mutex> lock(mutex_);
+    //std::unique_lock<std::mutex> lock(mutex_);
 
     if (r_ <= 0) {
       return;
@@ -34,7 +34,7 @@ class RateLimiter {
     // refill tokens
     auto now = Clock::now();
     auto diff = std::chrono::duration_cast<Duration>(now - last_);
-    tokens_ = std::min(b_, tokens_ + diff.count() * r_ / 1000000000);
+    tokens_ = std::min(b_, tokens_ + diff.count() * r_ / rate);
     last_ = now;
 
     // check tokens
@@ -42,8 +42,8 @@ class RateLimiter {
 
     // sleep
     if (tokens_ < 0) {
-      lock.unlock();
-      int64_t wait_time = -tokens_ * 1000000000 / r_;
+      //lock.unlock();
+      int64_t wait_time = -tokens_ * rate / r_;
       std::this_thread::sleep_for(std::chrono::nanoseconds(wait_time));
     }
   }
@@ -54,7 +54,7 @@ class RateLimiter {
     // refill tokens
     auto now = Clock::now();
     auto diff = std::chrono::duration_cast<Duration>(now - last_);
-    tokens_ = std::min(b_, tokens_ + diff.count() * r_ * TOKEN_PRECISION / 1000000000);
+    tokens_ = std::min(b_, tokens_ + diff.count() * r_ * TOKEN_PRECISION / rate);
     last_ = now;
 
     // set rate
@@ -64,13 +64,15 @@ class RateLimiter {
  private:
   using Clock = std::chrono::steady_clock;
   using Duration = std::chrono::nanoseconds;
-  static constexpr int64_t TOKEN_PRECISION = 10000;
+  static constexpr int64_t TOKEN_PRECISION = 100000000;
+  
 
   std::mutex mutex_;
   int64_t r_;
   int64_t b_;
   int64_t tokens_;
   Clock::time_point last_;
+  int64_t rate=1000000000;
 };
 
 } // utils
