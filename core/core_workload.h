@@ -183,6 +183,7 @@ class CoreWorkload {
     delete scan_len_chooser_;
     delete insert_key_sequence_;
     delete transaction_insert_key_sequence_;
+    delete op_chooser_;
   }
   AcknowledgedCounterGenerator * GetCounterGenerator()
   {
@@ -197,8 +198,9 @@ class CoreWorkload {
   new_chooser->AddValue(INSERT, insert_proportion);
   new_chooser->AddValue(SCAN, scan_proportion);
   new_chooser->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
-  //DiscreteGenerator<Operation>* old_chooser = op_chooser_.exchange(new_chooser);
-  //delete old_chooser;  
+  std::cout<<"Read rate: "<<read_proportion<<" "<<"Update proportion: "<<update_proportion<<std::endl;
+  DiscreteGenerator<Operation>* old_chooser = op_chooser_.exchange(new_chooser);
+  delete old_chooser;  
 }
 
  protected:
@@ -228,8 +230,8 @@ class CoreWorkload {
   bool read_all_fields_;
   bool write_all_fields_;
   Generator<uint64_t> *field_len_generator_;
-  //std::atomic<DiscreteGenerator<Operation>*> op_chooser_;
-  DiscreteGenerator<Operation> op_chooser_;
+  std::atomic<DiscreteGenerator<Operation>*> op_chooser_;
+  //DiscreteGenerator<Operation> op_chooser_;
   Generator<uint64_t> *key_chooser_; // transaction key gen
   Generator<uint64_t> *field_chooser_;
   Generator<uint64_t> *scan_len_chooser_;
