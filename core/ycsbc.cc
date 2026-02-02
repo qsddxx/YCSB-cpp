@@ -87,22 +87,59 @@ void RateLimitThread(std::string rate_file, std::vector<ycsbc::utils::RateLimite
       break;
     }
     last_time = next_time;
-
     for (auto x : rate_limiters)
     {
       x->SetRate(next_rate / num_threads);
     }
   }
 }
+void Read_Write_Proportion_Thread(std::string rate_file, ycsbc::CoreWorkload* cw, ycsbc::utils::CountDownLatch *latch)
+{
+  std::ifstream ifs;
+  ifs.open(rate_file);
+  std::cout<<"Rate file: "<<rate_file<<std::endl;
 
+  if (!ifs.is_open())
+  {
+    ycsbc::utils::Exception("failed to open: " + rate_file);
+  }
+
+  int64_t last_time = 0;
+  int64_t next_time;
+  double next_read_rate;
+  double next_update_rate;
+  while (ifs >> next_time >> next_read_rate>>next_update_rate)
+  {
+    
+    //ifs >> next_time >> next_read_rate>>next_update_rate;
+
+    if (next_time <= last_time)
+    {
+      ycsbc::utils::Exception("invalid rate file");
+    }
+    std::cout << "Read success - Time: " << next_time 
+              << ", Read rate: " << next_read_rate 
+              << ", Update rate: " << next_update_rate << std::endl;
+
+    bool done = latch->AwaitFor(next_time - last_time);
+    if (done)
+    {
+      break;
+    }
+    last_time = next_time;
+    cw->UpdateOperationProportions(next_read_rate,next_update_rate,0,0,0);
+  }
+}
 int main(const int argc, const char *argv[])
 {
   bool async_test = false;
   int num_executor_thread = 1;
-  int producer_num=1;
+  int producer_num=2;
   int num_per_batch=20;
   ycsbc::utils::Properties props;
   ParseCommandLine(argc, argv, props);
+  producer_num = std::stoi(props.GetProperty("producer_num", "0"));
+  num_per_batch = std::stoi(props.GetProperty("batch_num", "0"));
 
   const bool do_load = (props.GetProperty("doload", "false") == "true");
   const bool do_transaction = (props.GetProperty("dotransaction", "false") == "true");
@@ -205,7 +242,7 @@ int main(const int argc, const char *argv[])
     assert((int)client_threads.size() == num_threads);
 
     int sum = 0;
-    while (task_publisher.total_complete_num.load() != producer_num*total_ops)
+    while (task_publisher.total_complete_num.load() != total_ops)
     {
       //measurements->SetTaskNum(task_publisher.TaskList.size());
       usleep(1000000);
@@ -245,10 +282,12 @@ int main(const int argc, const char *argv[])
     const int64_t ops_limit = std::stoi(props.GetProperty("limit.ops", "0"));
     // rate file path for dynamic rate limiting, format "time_stamp_sec new_ops_per_second" per line
     std::string rate_file = props.GetProperty("limit.file", "");
+    std::string proportion_file=props.GetProperty("proportion.file","");
+    std::cout<<"Proportion file: "<<proportion_file<<std::endl;
 
     const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
 
-    ycsbc::utils::CountDownLatch latch(num_threads);
+    ycsbc::utils::CountDownLatch latch(1);
     ycsbc::utils::Timer<double> timer;
 
     timer.Start();
@@ -289,11 +328,15 @@ int main(const int argc, const char *argv[])
     {
       rlim_future = std::async(std::launch::async, RateLimitThread, rate_file, rate_limiters, &latch);
     }
+    if(proportion_file!="")
+    {
+      rlim_future = std::async(std::launch::async, Read_Write_Proportion_Thread, proportion_file, &wl, &latch);
+    }
 
     assert((int)client_threads.size() == num_threads);
 
     int sum = 0;
-    while (task_publisher.total_complete_num.load() != producer_num*total_ops)
+    while (task_publisher.total_complete_num.load() != total_ops)
     {
       //measurements->SetTaskNum(task_publisher.TaskList.size());
       usleep(100000);
