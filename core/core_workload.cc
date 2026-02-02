@@ -144,26 +144,27 @@ void CoreWorkload::Init(const utils::Properties &p) {
     ordered_inserts_ = true;
   }
 
-
+  DiscreteGenerator<Operation>* new_chooser = new DiscreteGenerator<Operation>();  
+  op_chooser_.store(new_chooser);
   if (read_proportion > 0) {
-    //op_chooser_.load()->AddValue(READ, read_proportion);
-    op_chooser_.AddValue(READ, read_proportion);
+    op_chooser_.load()->AddValue(READ, read_proportion);
+    //op_chooser_.AddValue(READ, read_proportion);
   }
   if (update_proportion > 0) {
-    //op_chooser_.load()->AddValue(UPDATE, update_proportion);
-    op_chooser_.AddValue(UPDATE, update_proportion);
+    op_chooser_.load()->AddValue(UPDATE, update_proportion);
+    //op_chooser_.AddValue(UPDATE, update_proportion);
   }
   if (insert_proportion > 0) {
-    //op_chooser_.load()->AddValue(INSERT, insert_proportion);
-    op_chooser_.AddValue(INSERT, insert_proportion);
+    op_chooser_.load()->AddValue(INSERT, insert_proportion);
+    //op_chooser_.AddValue(INSERT, insert_proportion);
   }
   if (scan_proportion > 0) {
-    //op_chooser_.load()->AddValue(SCAN, scan_proportion);
-    op_chooser_.AddValue(SCAN, scan_proportion);
+    op_chooser_.load()->AddValue(SCAN, scan_proportion);
+    //op_chooser_.AddValue(SCAN, scan_proportion);
   }
   if (readmodifywrite_proportion > 0) {
-    //op_chooser_.load()->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
-    op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
+    op_chooser_.load()->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
+    //op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
   insert_key_sequence_ = new CounterGenerator(insert_start);
@@ -322,7 +323,7 @@ void CoreWorkload::GenerateInsertTask(int task_num,std::vector<DB::Task>& task_l
 }
 bool CoreWorkload::DoTransaction(DB &db) {
   DB::Status status;
-  switch (op_chooser_.Next()) {
+  switch (op_chooser_.load()->Next()) {
     case READ:
       status = TransactionRead(db);
       break;
@@ -350,7 +351,7 @@ void CoreWorkload::GenerateTransactionTask(int task_num,std::vector<DB::Task>& t
   Clock::time_point time_=Clock::now();
   for(int i=0;i<task_num;i++)
   {
-    switch (op_chooser_.Next()) {
+    switch (op_chooser_.load()->Next()) {
       case READ:
         GenerateTransactionReadTask(task_list[i],time_);
         break;
