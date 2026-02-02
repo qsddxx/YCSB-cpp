@@ -89,6 +89,7 @@ namespace ycsbc
       }
       rlimt_ = {};
       total_complete_num.store(0);
+      middle_total=0;
     }
     void SetDB(std::vector<DB *> *dblist)
     {
@@ -101,13 +102,13 @@ namespace ycsbc
     {
       timer_list.clear();
       timer_list.resize(producer_thread_num);
-      for(int i=0;i<producer_thread_num;i++)
+      /*for(int i=0;i<producer_thread_num;i++)
       {
         timer_list[i].clear();
         //timer_index=0;
         timer_list[i].resize(num);
         std::cout<<" line "<<i<<" size "<<num<<std::endl;
-      }
+      }*/
       timer_index=0;
     }
     void FinishReport(const int interval)
@@ -246,12 +247,25 @@ namespace ycsbc
     {
       // using Clock = std::chrono::high_resolution_clock;
       thread_local int index=i;
+      thread_local int64_t thread_total=0;
       std::cout<<"The index is "<<index<<std::endl;
       while (!stopFlag.load())
       {
         {
           std::unique_lock<std::mutex> lock(mtx);
           cv_task.wait(lock);
+          if(is_loading)
+          {
+            thread_total=std::min(load_total_ops-middle_total,int64_t(load_total_ops/producer_thread_num)+1);
+            middle_total+=thread_total;
+          }
+          else
+          {
+            thread_total=std::min(transaction_total_ops-middle_total,int64_t(transaction_total_ops/producer_thread_num)+1);
+            middle_total+=thread_total;
+          }
+          timer_list[index].clear();
+          timer_list[index].resize(thread_total);
           lock.unlock();
         }
         if (stopFlag.load())
@@ -264,10 +278,10 @@ namespace ycsbc
         thread_local uint64_t timer_index_=0;
         thread_local uint64_t middle_timer_index=0;
         thread_local Clock::time_point time1=Clock::now();
-        sleep(2);
+        sleep(0.1);
         if (is_loading)
         {
-          std::cout << "Loading: " << load_total_ops << std::endl;
+          std::cout << "Loading: " << thread_total<<std::endl;
           total=0;
           middle_task.clear();
           batch_num=0;
@@ -278,9 +292,9 @@ namespace ycsbc
           {
             (*(DBList[index])).Init();
           }
-          while (total < load_total_ops)
+          while (total < thread_total)
           {
-            batch_num = std::min(num_per_batch, load_total_ops - total);
+            batch_num = std::min(num_per_batch, thread_total - total);
             wl->GenerateInsertTask(batch_num, middle_task);
             //GeneratePromise(middle_task,counter_,true);
             timer_index_=middle_timer_index;
@@ -334,9 +348,9 @@ namespace ycsbc
             (*(DBList[index])).Init();
           }
           //std::cout << "Transaction " << transaction_total_ops << std::endl;
-          while (total < transaction_total_ops)
+          while (total < thread_total)
           {
-            batch_num = std::min(num_per_batch, transaction_total_ops - total);
+            batch_num = std::min(num_per_batch, thread_total - total);
             wl->GenerateTransactionTask(batch_num, middle_task);
             //GeneratePromise(middle_task,counter_,false);
             //Clock::time_point time1=Clock::now();
@@ -416,6 +430,7 @@ namespace ycsbc
     std::vector<std::thread> producer_threads;
     std::atomic<int> index_=0;
     int64_t num_per_batch;
+    int64_t middle_total;
   };
 }
 #endif
