@@ -11,23 +11,29 @@
 
 #include <cstdint>
 
-namespace ycsbc {
-enum class OperationType
+namespace ycsbc
 {
-  kRead,
-  kWrite
-};
-template <typename Value>
-class Generator {
- public:
-  virtual Value Next() = 0;
-  virtual Value Next(OperationType op_type)
+  enum class OperationType
   {
-    return Value{};
-  }
-  virtual Value Last() = 0;
-  virtual ~Generator() { }
-};
+    kRead,
+    kWrite
+  };
+  template <typename Value>
+  class Generator
+  {
+  public:
+    virtual Value Next() = 0;
+    virtual Value Next(OperationType op_type)
+    {
+      return Value{};
+    }
+    virtual Value Last() = 0;
+    virtual Value Last(OperationType op_type)
+    {
+      return Value{};
+    }
+    virtual ~Generator() {}
+  };
 
 } // ycsbc
 
