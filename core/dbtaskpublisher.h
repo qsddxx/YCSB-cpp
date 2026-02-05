@@ -18,6 +18,7 @@
 #include <memory>
 #include <chrono>
 #include <algorithm>
+#include <iomanip>
 #include "db.h"
 namespace ycsbc
 {
@@ -25,13 +26,12 @@ namespace ycsbc
   class DBTaskPublisher
   {
   public:
-    DBTaskPublisher(int load_total_ops_, int transaction_total_ops_, CoreWorkload *wl_, int64_t task_per_second_, int thread_num_, bool async_test_, int num_executor_thread, Measurements *m,AcknowledgedCounterGenerator* counter,int num_per_batch_, int producer_thread_num_=4) : wl(wl_),
+    DBTaskPublisher(int load_total_ops_, int transaction_total_ops_, CoreWorkload *wl_, int64_t task_per_second_, int thread_num_, bool async_test_, Measurements *m,AcknowledgedCounterGenerator* counter,int num_per_batch_, int producer_thread_num_=4) : wl(wl_),
                                                                                                                                                                                                  load_total_ops(load_total_ops_),
                                                                                                                                                                                                  transaction_total_ops(transaction_total_ops_),
                                                                                                                                                                                                  task_per_second(task_per_second_),
                                                                                                                                                                                                  thread_num(thread_num_),
                                                                                                                                                                                                  async_test(async_test_),
-                                                                                                                                                                                                 executor_(num_executor_thread),
                                                                                                                                                                                                  measurements_(m),
                                                                                                                                                                                                  counter_(counter),
                                                                                                                                                                                                  producer_thread_num(producer_thread_num_),
@@ -103,10 +103,15 @@ namespace ycsbc
       timer_list.resize(producer_thread_num);
       for(int i=0;i<producer_thread_num;i++)
       {
+        int64_t local_load_total_ops = this->load_total_ops / producer_thread_num;
+        if (i == producer_thread_num - 1)
+        {
+          local_load_total_ops += this->load_total_ops % producer_thread_num;
+        }
         timer_list[i].clear();
         //timer_index=0;
-        timer_list[i].resize(num);
-        std::cout<<" line "<<i<<" size "<<num<<std::endl;
+        timer_list[i].resize(local_load_total_ops);
+        std::cout<<" line "<<i<<" size "<<local_load_total_ops<<std::endl;
       }
       timer_index=0;
     }
@@ -202,46 +207,6 @@ namespace ycsbc
     std::vector<std::vector<utils::Timer<uint64_t,std::nano>>> timer_list;
 
   private:
-    void GeneratePromise(std::vector<DB::Task> &task_list,AcknowledgedCounterGenerator* c,bool is_loading_)
-    {
-      using Clock = std::chrono::high_resolution_clock;
-      for (auto &t : task_list)
-      {
-        std::shared_ptr<folly::Promise<Clock::time_point>> promise_ = std::make_shared<folly::Promise<Clock::time_point>>();
-        t.promise = std::move(promise_);
-        auto timer = t.timer_;
-        auto operation = t.operation;
-        auto num=t.key_num;
-        auto future = t.promise->getFuture().via(&executor_).thenValue([this, timer, operation,num,is_loading_,c](Clock::time_point end_time)
-                                                                       {
-                                                                   
-        auto elapsed=timer->End(end_time);
-        
-        switch(operation)
-        {
-          case READ:
-            this->measurements_->Report(READ, elapsed);
-            break;
-          case SCAN:
-            this->measurements_->Report(SCAN, elapsed);
-            break;
-          case INSERT:
-            if(!is_loading_)
-            {
-              c->Acknowledge(num);
-            }
-            this->measurements_->Report(INSERT, elapsed);
-            break;
-          case UPDATE:
-            this->measurements_->Report(UPDATE, elapsed);
-            break;
-          default:
-            break;
-        }
-            
-        this->total_complete_num.fetch_add(1); });
-      }
-    }
     void workerLoop(int i)
     {
       // using Clock = std::chrono::high_resolution_clock;
@@ -264,10 +229,15 @@ namespace ycsbc
         thread_local uint64_t timer_index_=0;
         thread_local uint64_t middle_timer_index=0;
         thread_local Clock::time_point time1=Clock::now();
+        int64_t local_load_total_ops = this->load_total_ops / producer_thread_num;
+        if (index == producer_thread_num - 1)
+        {
+          local_load_total_ops += this->load_total_ops % producer_thread_num;
+        }
         sleep(2);
         if (is_loading)
         {
-          std::cout << "Loading: " << load_total_ops << std::endl;
+          std::cout << "Loading: " << local_load_total_ops << std::endl;
           total=0;
           middle_task.clear();
           batch_num=0;
@@ -278,9 +248,9 @@ namespace ycsbc
           {
             (*(DBList[index])).Init();
           }
-          while (total < load_total_ops)
+          while (total <  local_load_total_ops)
           {
-            batch_num = std::min(num_per_batch, load_total_ops - total);
+            batch_num = std::min(num_per_batch,  local_load_total_ops - total);
             wl->GenerateInsertTask(batch_num, middle_task);
             //GeneratePromise(middle_task,counter_,true);
             timer_index_=middle_timer_index;
@@ -334,9 +304,14 @@ namespace ycsbc
             (*(DBList[index])).Init();
           }
           //std::cout << "Transaction " << transaction_total_ops << std::endl;
-          while (total < transaction_total_ops)
+          int64_t local_transaction_total_ops = this->transaction_total_ops / producer_thread_num;
+          if (index == producer_thread_num - 1)
           {
-            batch_num = std::min(num_per_batch, transaction_total_ops - total);
+            local_transaction_total_ops += this->transaction_total_ops % producer_thread_num;
+          }
+          while (total < local_transaction_total_ops)
+          {
+            batch_num = std::min(num_per_batch, local_transaction_total_ops - total);
             wl->GenerateTransactionTask(batch_num, middle_task);
             //GeneratePromise(middle_task,counter_,false);
             //Clock::time_point time1=Clock::now();
@@ -406,7 +381,6 @@ namespace ycsbc
     std::mutex mtx;
     bool is_loading = false;
     std::thread workerThread;
-    folly::CPUThreadPoolExecutor executor_;
     Measurements *measurements_;
     bool should_init_db = true;
     bool should_clean_up = false;

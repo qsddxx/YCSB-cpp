@@ -97,10 +97,8 @@ void RateLimitThread(std::string rate_file, std::vector<ycsbc::utils::RateLimite
 
 int main(const int argc, const char *argv[])
 {
-  bool async_test = false;
-  int num_executor_thread = 1;
-  int producer_num=1;
-  int num_per_batch=20;
+  bool async_test = true;
+  int num_per_batch = 20;
   ycsbc::utils::Properties props;
   ParseCommandLine(argc, argv, props);
 
@@ -113,7 +111,8 @@ int main(const int argc, const char *argv[])
   }
 
   const int num_threads = stoi(props.GetProperty("threadcount", "1"));
-  std::cout<<"Num thread: "<<num_threads<<std::endl;
+  int producer_num = num_threads;
+  std::cout << "Num thread: " << num_threads << std::endl;
 
   ycsbc::Measurements *measurements = ycsbc::CreateMeasurements(&props);
   if (measurements == nullptr)
@@ -135,7 +134,6 @@ int main(const int argc, const char *argv[])
   }
   for (auto &d : dbs)
   {
-    (*d).SetAsyncTest(async_test);
     (*d).SetMeasurements(measurements);
   }
 
@@ -143,9 +141,9 @@ int main(const int argc, const char *argv[])
   wl.Init(props);
   int load_total_ops_ = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
   int64_t ops_limit_ = std::stoi(props.GetProperty("limit.ops", "0"));
-  std::cout<<"Limit speed: "<<ops_limit_<<std::endl;
+  std::cout << "Limit speed: " << ops_limit_ << std::endl;
   int transaction_total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
-  ycsbc::DBTaskPublisher task_publisher(load_total_ops_, transaction_total_ops, &wl, ops_limit_, num_threads, async_test, num_executor_thread, measurements,wl.GetCounterGenerator(),num_per_batch,producer_num);
+  ycsbc::DBTaskPublisher task_publisher(load_total_ops_, transaction_total_ops, &wl, ops_limit_, num_threads, async_test, measurements, wl.GetCounterGenerator(), num_per_batch, producer_num);
   task_publisher.SetDB(&dbs);
 
   // print status periodically
@@ -153,10 +151,8 @@ int main(const int argc, const char *argv[])
   const int status_interval = std::stoi(props.GetProperty("status.interval", "10"));
 
   // load phase
-  std::string b="";
-    b.clear();
-    std::cout<<"Should the load begin?: "<<std::endl;;
-    std::cin>>b;
+  std::string b = "";
+  b.clear();
   if (do_load)
   {
     task_publisher.Clear();
@@ -169,8 +165,8 @@ int main(const int argc, const char *argv[])
     std::future<void> status_future;
     if (show_status)
     {
-      //status_future = std::async(std::launch::async, StatusThread,
-                                 //measurements, &latch, status_interval);
+      // status_future = std::async(std::launch::async, StatusThread,
+      // measurements, &latch, status_interval);
     }
     std::vector<std::future<void>> client_threads;
     const int64_t ops_limit = std::stoi(props.GetProperty("limit.ops", "0"));
@@ -179,9 +175,10 @@ int main(const int argc, const char *argv[])
     task_publisher.SetTimerList(total_ops);
     if (ops_limit > 0 || rate_file != "")
     {
-      for(int j=0;j<producer_num;j++)
+      for (int j = 0; j < producer_num; j++)
       {
-        auto rlim = new ycsbc::utils::RateLimiter(ops_limit, ops_limit);
+        int64_t per_thread_ops = ops_limit / producer_num;
+        auto rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
         task_publisher.SetRateLimiter(rlim);
         rate_limiters.emplace_back(rlim);
       }
@@ -196,18 +193,17 @@ int main(const int argc, const char *argv[])
     {
       for (int i = 0; i < num_threads; ++i)
       {
-        client_threads.emplace_back(std::async(std::launch::async, ycsbc::DoTaskSync, dbs[i], true, !do_transaction, &task_publisher, i,wl.GetCounterGenerator(),true,producer_num));
+        client_threads.emplace_back(std::async(std::launch::async, ycsbc::DoTaskSync, dbs[i], true, !do_transaction, &task_publisher, i, wl.GetCounterGenerator(), true, producer_num));
       }
     }
     else
     {
     }
-    assert((int)client_threads.size() == num_threads);
 
     int sum = 0;
-    while (task_publisher.total_complete_num.load() != producer_num*total_ops)
+    while (task_publisher.total_complete_num.load() != total_ops)
     {
-      //measurements->SetTaskNum(task_publisher.TaskList.size());
+      // measurements->SetTaskNum(task_publisher.TaskList.size());
       usleep(1000000);
     }
     task_publisher.FinishReport(status_interval);
@@ -217,11 +213,7 @@ int main(const int argc, const char *argv[])
 
     if (show_status)
     {
-      //status_future.wait();
-    }
-    if(async_test&&!do_transaction)
-    {
-      task_publisher.CleanUpDirectly();
+      // status_future.wait();
     }
 
     std::cout << "Load runtime(sec): " << runtime << std::endl;
@@ -232,11 +224,11 @@ int main(const int argc, const char *argv[])
 
   measurements->Reset();
   std::this_thread::sleep_for(std::chrono::seconds(stoi(props.GetProperty("sleepafterload", "0"))));
-  std::string a="";
-    a.clear();
-    std::cout<<"Should the transaction begin?: "<<std::endl;;
-    std::cin>>a;
-  
+  std::string a = "";
+  a.clear();
+  std::cout << "Should the transaction begin?: " << std::endl;
+  ;
+  std::cin >> a;
 
   // transaction phase
   if (do_transaction)
@@ -255,17 +247,18 @@ int main(const int argc, const char *argv[])
     std::future<void> status_future;
     if (show_status)
     {
-      //status_future = std::async(std::launch::async, StatusThread,
-                                 //measurements, &latch, status_interval);
+      // status_future = std::async(std::launch::async, StatusThread,
+      // measurements, &latch, status_interval);
     }
     std::vector<std::future<void>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
     task_publisher.SetTimerList(total_ops);
     if (ops_limit > 0 || rate_file != "")
     {
-      for(int j=0;j<producer_num;j++)
+      for (int j = 0; j < producer_num; j++)
       {
-        auto rlim = new ycsbc::utils::RateLimiter(ops_limit, ops_limit);
+        int64_t per_thread_ops = ops_limit / producer_num;
+        auto rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
         task_publisher.SetRateLimiter(rlim);
         rate_limiters.emplace_back(rlim);
       }
@@ -280,7 +273,7 @@ int main(const int argc, const char *argv[])
     {
       for (int i = 0; i < num_threads; ++i)
       {
-        client_threads.emplace_back(std::async(std::launch::async, ycsbc::DoTaskSync, dbs[i], !do_load, true, &task_publisher, i,wl.GetCounterGenerator(),false,producer_num));
+        client_threads.emplace_back(std::async(std::launch::async, ycsbc::DoTaskSync, dbs[i], !do_load, true, &task_publisher, i, wl.GetCounterGenerator(), false, producer_num));
       }
     }
 
@@ -290,12 +283,10 @@ int main(const int argc, const char *argv[])
       rlim_future = std::async(std::launch::async, RateLimitThread, rate_file, rate_limiters, &latch);
     }
 
-    assert((int)client_threads.size() == num_threads);
-
     int sum = 0;
-    while (task_publisher.total_complete_num.load() != producer_num*total_ops)
+    while (task_publisher.total_complete_num.load() != total_ops)
     {
-      //measurements->SetTaskNum(task_publisher.TaskList.size());
+      // measurements->SetTaskNum(task_publisher.TaskList.size());
       usleep(100000);
     }
     task_publisher.FinishReport(status_interval);
@@ -305,14 +296,14 @@ int main(const int argc, const char *argv[])
 
     if (show_status)
     {
-      //status_future.wait();
+      // status_future.wait();
     }
 
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
     task_publisher.Clear();
-    if(async_test)
+    if (async_test)
     {
       task_publisher.CleanUpDirectly();
     }

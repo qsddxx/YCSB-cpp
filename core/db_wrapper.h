@@ -35,11 +35,6 @@ class DBWrapper : public DB {
   void Cleanup() {
     db_->Cleanup();
   }
-  void SetAsyncTest(bool async_test_) override
-  {
-    async_test=async_test_;
-    db_->SetAsyncTest(async_test_);
-  }
   void SetMeasurements(Measurements* m) override
   {
     measurements_=m;

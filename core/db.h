@@ -60,6 +60,7 @@ struct Information
   AcknowledgedCounterGenerator* counter;
   std::atomic<int>* total_complete_num;
   bool is_loading;
+  std::string answer;
 };
 class Task;
 class DB {
@@ -80,18 +81,18 @@ class DB {
     public:
     using Clock = std::chrono::high_resolution_clock;
     Operation operation;
-    std::string* table;
+    std::string* table = nullptr;
     std::shared_ptr<std::string> key;
     std::shared_ptr<std::vector<std::string>> fields;
     std::shared_ptr<std::vector<Field>> result;
     std::shared_ptr<std::vector<std::vector<Field>>> scan_result;
-    int record_count;
+    int record_count = 0;
     std::shared_ptr<std::vector<Field>> values;
     std::shared_ptr<utils::Timer<uint64_t, std::nano>> timer_;
     std::shared_ptr<folly::Promise<Clock::time_point>> promise;
     std::shared_ptr<Information> information;
-    uint64_t key_num;
-    Clock::time_point* end_time;
+    uint64_t key_num = 0;
+    Clock::time_point* end_time = 0;
   };
   ///
   /// Initializes any state for accessing this DB.
@@ -317,10 +318,6 @@ class DB {
       Cleanup();
     }
   }
-  virtual void SetAsyncTest(bool async_test_)
-  {
-    async_test=async_test_;
-  }
   virtual void SetMeasurements(Measurements* m)
   {
     measurements_=m;
@@ -330,7 +327,7 @@ class DB {
   utils::Properties *props_;
   //DBTaskPublisher* task_publisher;
   Measurements* measurements_;
-  bool async_test=true;
+  bool async_test = false;
 };
 } // ycsbc
 
