@@ -89,6 +89,7 @@ namespace ycsbc
       }
       rlimt_ = {};
       total_complete_num.store(0);
+      middle_total=0;
     }
     void SetDB(std::vector<DB *> *dblist)
     {
@@ -101,7 +102,7 @@ namespace ycsbc
     {
       timer_list.clear();
       timer_list.resize(producer_thread_num);
-      for(int i=0;i<producer_thread_num;i++)
+      /*for(int i=0;i<producer_thread_num;i++)
       {
         int64_t local_load_total_ops = this->load_total_ops / producer_thread_num;
         if (i == producer_thread_num - 1)
@@ -110,9 +111,9 @@ namespace ycsbc
         }
         timer_list[i].clear();
         //timer_index=0;
-        timer_list[i].resize(local_load_total_ops);
-        std::cout<<" line "<<i<<" size "<<local_load_total_ops<<std::endl;
-      }
+        timer_list[i].resize(num);
+        std::cout<<" line "<<i<<" size "<<num<<std::endl;
+      }*/
       timer_index=0;
     }
     void FinishReport(const int interval)
@@ -211,12 +212,25 @@ namespace ycsbc
     {
       // using Clock = std::chrono::high_resolution_clock;
       thread_local int index=i;
+      thread_local int64_t thread_total=0;
       std::cout<<"The index is "<<index<<std::endl;
       while (!stopFlag.load())
       {
         {
           std::unique_lock<std::mutex> lock(mtx);
           cv_task.wait(lock);
+          if(is_loading)
+          {
+            thread_total=std::min(load_total_ops-middle_total,int64_t(load_total_ops/producer_thread_num)+1);
+            middle_total+=thread_total;
+          }
+          else
+          {
+            thread_total=std::min(transaction_total_ops-middle_total,int64_t(transaction_total_ops/producer_thread_num)+1);
+            middle_total+=thread_total;
+          }
+          timer_list[index].clear();
+          timer_list[index].resize(thread_total);
           lock.unlock();
         }
         if (stopFlag.load())
@@ -234,7 +248,7 @@ namespace ycsbc
         {
           local_load_total_ops += this->load_total_ops % producer_thread_num;
         }
-        sleep(2);
+        sleep(0.1);
         if (is_loading)
         {
           std::cout << "Loading: " << local_load_total_ops << std::endl;
@@ -390,6 +404,7 @@ namespace ycsbc
     std::vector<std::thread> producer_threads;
     std::atomic<int> index_=0;
     int64_t num_per_batch;
+    int64_t middle_total;
   };
 }
 #endif
