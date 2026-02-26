@@ -10,15 +10,7 @@
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
-  struct ElasticLSMOptions
-  {
-    int max_background_threads = 16;
-    int min_tp_threads = 2;
-    int min_ap_threads = 2;
-    int min_compaction_threads = 2;
-    int max_tp_task_queue = 1024;
-    int max_compaction_num = 32;
-  };
+
 namespace {
   const std::string MAX_BACKGROUND_THREADS = "elastic.max_background_threads";
   const std::string MAX_BACKGROUND_THREADS_DEFAULT = "16";
@@ -37,6 +29,12 @@ namespace {
 
   const std::string MAX_COMPACTION_NUM = "elastic.max_compaction_num";
   const std::string MAX_COMPACTION_NUM_DEFAULT = "32";
+
+  const std::string COMPACTION_MORSEL_SIZE = "elastic.compaction_morsel_size";
+  const std::string COMPACTION_MORSEL_SIZE_DEFAULT = "2000";
+
+  const std::string TP_MORSEL_SIZE = "elastic.tp_morsel_size";
+  const std::string TP_MORSEL_SIZE_DEFAULT = "2000";
 
   const std::string PROP_NAME = "elastic.dbname";
   const std::string PROP_NAME_DEFAULT = "/tmp/elastic_testdb";
@@ -405,6 +403,10 @@ void ElasticDB::GetElasticOptions(const utils::Properties &props, rocksdb::Elast
       props.GetProperty(MAX_TP_TASK_QUEUE, MAX_TP_TASK_QUEUE_DEFAULT));
   elastic_options->max_compaction_num = std::stoi(
       props.GetProperty(MAX_COMPACTION_NUM, MAX_COMPACTION_NUM_DEFAULT));
+  elastic_options->compaction_morsel_size = std::stoi(
+      props.GetProperty(COMPACTION_MORSEL_SIZE, COMPACTION_MORSEL_SIZE_DEFAULT));
+  elastic_options->tp_morsel_size = std::stoi(
+      props.GetProperty(TP_MORSEL_SIZE, TP_MORSEL_SIZE_DEFAULT));
 }
 
 void ElasticDB::SerializeRow(const std::vector<Field> &values, std::string &data) {
@@ -483,8 +485,7 @@ DB::Status ElasticDB::ReadSingle(const std::string &table, std::shared_ptr<std::
         *information->end_time = Clock::now();
         information->total_complete_num->fetch_add(1);
       });
-    rocksdb::Status s = elastic_db_->Get(read_options_, *key, &information->answer,
-                                         callback);
+    rocksdb::Status s = elastic_db_->Get(read_options_, *key, &information->answer, callback);
     if (s.IsNotFound()) {
       return kNotFound;
     } else if (!s.ok()) {
@@ -502,6 +503,29 @@ DB::Status ElasticDB::ScanSingle(const std::string &table, std::shared_ptr<std::
                                  std::shared_ptr<std::vector<std::vector<Field>>> result,std::shared_ptr<Information> information) {
   if(async_test)
   {
+    auto func = new std::function<void(rocksdb::Iterator *)>(
+      [key, len, fields, result, this](rocksdb::Iterator *db_iter){
+        db_iter->Seek(*key);
+        for (int i = 0; db_iter->Valid() && i < len; i++) {
+          std::string data = db_iter->value().ToString();
+          result->push_back(std::vector<Field>());
+          std::vector<Field> &values = result->back();
+          if (fields != nullptr) {
+            DeserializeRowFilter(values, data, *fields);
+          } else {
+            DeserializeRow(values, data);
+            assert(values.size() == static_cast<size_t>(fieldcount_));
+          }
+          db_iter->Next();
+        }
+      }
+    );
+    auto callback = new std::function<void()>(
+      [information]() {
+        *information->end_time = Clock::now();
+        information->total_complete_num->fetch_add(1);
+      });
+    rocksdb::Status s = elastic_db_->Scan(read_options_, func, callback);
     return kOK;
   }
   else

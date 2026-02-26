@@ -41,8 +41,8 @@ ifeq ($(BIND_ELASTIC), 1)
 	ifeq ($(ELASTIC_DIR),)
         $(error Please set the environment variable ELASTIC_DIR to the rootpath of Elastic-lsm)
 	endif
-	LDFLAGS += -L$(BACHOPD_DIR) -lrocksdb -Wl,-rpath,$(BACHOPD_DIR)
-	CXXFLAGS += -I$(BACHOPD_DIR)/include
+	LDFLAGS += -L$(ELASTIC_DIR) -lrocksdb -Wl,-rpath,$(ELASTIC_DIR)
+	CXXFLAGS += -I$(ELASTIC_DIR)/include
 	SOURCES += $(wildcard elastic/*.cc)
     USE_FOLLY = 1
 endif
@@ -58,7 +58,8 @@ ifeq ($(BIND_LEVELDB), 1)
 endif
 
 ifeq ($(BIND_ROCKSDB), 1)
-	LDFLAGS += -lrocksdb -ldl -lz -lsnappy -lzstd -lbz2 -llz4 -luring
+	LDFLAGS += -L../test/rocksdb -lrocksdb -Wl,-rpath,/home/caoyihao/test/rocksdb -ldl -lz -lsnappy -lzstd -lbz2 -llz4 -luring
+	CXXFLAGS += -I../test/rocksdb/include
 	SOURCES += $(wildcard rocksdb/*.cc)
 endif
 
