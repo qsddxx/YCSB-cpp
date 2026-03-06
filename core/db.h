@@ -56,6 +56,7 @@ enum Operation {
 struct Information
 {
   using Clock = std::chrono::high_resolution_clock;
+  Clock::time_point* start_time;
   Clock::time_point* end_time;
   AcknowledgedCounterGenerator* counter;
   std::atomic<int>* total_complete_num;
@@ -201,6 +202,7 @@ class DB {
         switch(task_.operation)
         {
           case READ:
+            *(task_.information->start_time)=Clock::now();
             Read(*task_.table, (task_.key), task_.fields, (task_.result),task_.information);
             //task_.promise->setValue(Clock::now());
             *(task_.information->end_time)=Clock::now();
@@ -208,6 +210,7 @@ class DB {
             //measurements_->Report(READ,task_.timer_->GetElpased(Clock::now(),start));
             break;
           case SCAN:
+            *(task_.information->start_time)=Clock::now();
             Scan(*task_.table, (task_.key),task_.record_count, task_.fields, (task_.scan_result),task_.information);
             //task_.promise->setValue(Clock::now());
             *(task_.information->end_time)=Clock::now();
@@ -215,6 +218,7 @@ class DB {
             //measurements_->Report(SCAN,task_.timer_->GetElpased(Clock::now(),start));
             break;
           case INSERT:
+            *(task_.information->start_time)=Clock::now();
             Insert(*task_.table,(task_.key),(task_.values),task_.information);
             *(task_.information->end_time)=Clock::now();
             task_.information->total_complete_num->fetch_add(1);
@@ -228,6 +232,7 @@ class DB {
             //measurements_->Report(INSERT,task_.timer_->GetElpased(Clock::now(),start));
             break;
           case UPDATE:
+            *(task_.information->start_time)=Clock::now();
             Update(*task_.table,(task_.key),(task_.values),task_.information);
             //task_.promise->setValue(Clock::now());
             *(task_.information->end_time)=Clock::now();

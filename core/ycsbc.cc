@@ -108,7 +108,8 @@ void Read_Write_Proportion_Thread(std::string rate_file, ycsbc::CoreWorkload *cw
   int64_t next_time;
   double next_read_rate;
   double next_update_rate;
-  while (ifs >> next_time >> next_read_rate >> next_update_rate)
+  double next_scan_rate;
+  while (ifs >> next_time >> next_read_rate >> next_update_rate >> next_scan_rate)
   {
 
     // ifs >> next_time >> next_read_rate>>next_update_rate;
@@ -119,7 +120,8 @@ void Read_Write_Proportion_Thread(std::string rate_file, ycsbc::CoreWorkload *cw
     }
     std::cout << "Read success - Time: " << next_time
               << ", Read rate: " << next_read_rate
-              << ", Update rate: " << next_update_rate << std::endl;
+              << ", Update rate: " << next_update_rate
+              << ", Scan rate: " << next_scan_rate << std::endl;
 
     bool done = latch->AwaitFor(next_time - last_time);
     if (done)
@@ -127,7 +129,7 @@ void Read_Write_Proportion_Thread(std::string rate_file, ycsbc::CoreWorkload *cw
       break;
     }
     last_time = next_time;
-    cw->UpdateOperationProportions(next_read_rate, next_update_rate, 0, 0, 0);
+    cw->UpdateOperationProportions(next_read_rate, next_update_rate, 0, next_scan_rate, 0);
   }
 }
 void KeyChooser_Thread(std::string rate_file, ycsbc::CoreWorkload *cw, ycsbc::utils::CountDownLatch *latch)
@@ -172,7 +174,6 @@ void KeyChooser_Thread(std::string rate_file, ycsbc::CoreWorkload *cw, ycsbc::ut
 int main(const int argc, const char *argv[])
 {
   bool async_test = true;
-  int num_per_batch = 20;
   ycsbc::utils::Properties props;
   ParseCommandLine(argc, argv, props);
   int producer_num = std::stoi(props.GetProperty("producer_num", "0"));

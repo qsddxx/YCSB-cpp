@@ -701,7 +701,7 @@ namespace ycsbc
     new_chooser->AddValue(INSERT, insert_proportion);
     new_chooser->AddValue(SCAN, scan_proportion);
     new_chooser->AddValue(READMODIFYWRITE, readmodifywrite_proportion);
-    std::cout << "Read rate: " << read_proportion << " " << "Update proportion: " << update_proportion << std::endl;
+    std::cout << "Read rate: " << read_proportion << " " << "Update proportion: " << update_proportion << " " << scan_proportion << std::endl;
     op_chooser_.store(new_chooser);
     // delete old_chooser;
   }

@@ -120,6 +120,9 @@ namespace {
   const std::string PROP_FS_URI = "elastic.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
+  const std::string PROP_LEVEL_SEGMENT_MAX_FILE_NUM = "elastic.level_segment_max_file_num";
+  const std::string PROP_LEVEL_SEGMENT_MAX_FILE_NUM_DEFAULT = "4,2,5,5,5,5,5";
+
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
 #if ROCKSDB_MAJOR < 8
@@ -389,6 +392,22 @@ void ElasticDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
   }
 }
 
+std::vector<int> ParseLevelSegmentMaxFileNum(const std::string &str) {
+  std::vector<int> result;
+  size_t start = 0;
+  while (true) {
+    size_t comma = str.find(',', start);
+    if (comma == std::string::npos) {
+      result.push_back(std::stoi(str.substr(start)));
+      break;
+    } else {
+      result.push_back(std::stoi(str.substr(start, comma - start)));
+      start = comma + 1;
+    }
+  }
+  return result;
+}
+
 void ElasticDB::GetElasticOptions(const utils::Properties &props, rocksdb::ElasticLSMOptions *elastic_options)
 {
   elastic_options->max_background_threads = std::stoi(
@@ -407,6 +426,8 @@ void ElasticDB::GetElasticOptions(const utils::Properties &props, rocksdb::Elast
       props.GetProperty(COMPACTION_MORSEL_SIZE, COMPACTION_MORSEL_SIZE_DEFAULT));
   elastic_options->tp_morsel_size = std::stoi(
       props.GetProperty(TP_MORSEL_SIZE, TP_MORSEL_SIZE_DEFAULT));
+  elastic_options->level_segment_max_file_num = ParseLevelSegmentMaxFileNum(
+      props.GetProperty(PROP_LEVEL_SEGMENT_MAX_FILE_NUM, PROP_LEVEL_SEGMENT_MAX_FILE_NUM_DEFAULT));
 }
 
 void ElasticDB::SerializeRow(const std::vector<Field> &values, std::string &data) {
@@ -474,6 +495,10 @@ DB::Status ElasticDB::ReadSingle(const std::string &table, std::shared_ptr<std::
                                  std::shared_ptr<std::vector<Field>> result,std::shared_ptr<Information> information) {
   if(async_test)
   {
+    auto callfront = new std::function<void()>(
+      [information, key]() {
+        *information->start_time = Clock::now();
+      });
     auto callback = new std::function<void()>(
       [information, key, fields, result, this]() {
         if (fields != nullptr) {
@@ -485,7 +510,7 @@ DB::Status ElasticDB::ReadSingle(const std::string &table, std::shared_ptr<std::
         *information->end_time = Clock::now();
         information->total_complete_num->fetch_add(1);
       });
-    rocksdb::Status s = elastic_db_->Get(read_options_, *key, &information->answer, callback);
+    rocksdb::Status s = elastic_db_->Get(read_options_, *key, &information->answer, callfront, callback);
     if (s.IsNotFound()) {
       return kNotFound;
     } else if (!s.ok()) {
@@ -503,6 +528,10 @@ DB::Status ElasticDB::ScanSingle(const std::string &table, std::shared_ptr<std::
                                  std::shared_ptr<std::vector<std::vector<Field>>> result,std::shared_ptr<Information> information) {
   if(async_test)
   {
+    auto callfront = new std::function<void()>(
+      [information, key]() {
+        *information->start_time = Clock::now();
+      });
     auto func = new std::function<void(rocksdb::Iterator *)>(
       [key, len, fields, result, this](rocksdb::Iterator *db_iter){
         db_iter->Seek(*key);
@@ -525,7 +554,7 @@ DB::Status ElasticDB::ScanSingle(const std::string &table, std::shared_ptr<std::
         *information->end_time = Clock::now();
         information->total_complete_num->fetch_add(1);
       });
-    rocksdb::Status s = elastic_db_->Scan(read_options_, func, callback);
+    rocksdb::Status s = elastic_db_->Scan(read_options_, func, callfront, callback);
     return kOK;
   }
   else
@@ -538,24 +567,28 @@ DB::Status ElasticDB::UpdateSingle(const std::string &table, std::shared_ptr<std
                                    std::shared_ptr<std::vector<Field>> values,std::shared_ptr<Information> information) {
   if(async_test)
   {
+    auto callfront = new std::function<void()>(
+      [information, key]() {
+        *information->start_time = Clock::now();
+      });
     auto midcallback = new std::function<bool()>(
       [information, values, this]() {
-        std::vector<Field> current_values;
-        DeserializeRow(current_values, information->answer);
-        assert(current_values.size() == static_cast<size_t>(fieldcount_));
-        for (Field &new_field : (*values)) {
-          bool found MAYBE_UNUSED = false;
-          for (Field &cur_field : current_values) {
-            if (cur_field.name == new_field.name) {
-              found = true;
-              cur_field.value = new_field.value;
-              break;
-            }
-          }
-          assert(found);
-        }
-        information->answer.clear();
-        SerializeRow(current_values, information->answer);
+        // std::vector<Field> current_values;
+        // // DeserializeRow(current_values, information->answer);
+        // assert(current_values.size() == static_cast<size_t>(fieldcount_));
+        // for (Field &new_field : (*values)) {
+        //   bool found MAYBE_UNUSED = false;
+        //   for (Field &cur_field : current_values) {
+        //     if (cur_field.name == new_field.name) {
+        //       found = true;
+        //       cur_field.value = new_field.value;
+        //       break;
+        //     }
+        //   }
+        //   assert(found);
+        // }
+        // information->answer.clear();
+        SerializeRow(*values, information->answer);
         return true;
       });
     auto callbackend = new std::function<void()>(
@@ -563,7 +596,7 @@ DB::Status ElasticDB::UpdateSingle(const std::string &table, std::shared_ptr<std
           *information->end_time = Clock::now();
           information->total_complete_num->fetch_add(1);
         });
-    rocksdb::Status s = elastic_db_->Update(read_options_, write_options_, *key, &information->answer, midcallback, callbackend);
+    rocksdb::Status s = elastic_db_->Update(read_options_, write_options_, *key, &information->answer, callfront, midcallback, callbackend);
     return kOK;
   }
   else
@@ -589,14 +622,17 @@ DB::Status ElasticDB::InsertSingle(const std::string &table, std::shared_ptr<std
   
   if(async_test)
   {
-    information->answer.clear();
-    SerializeRow(*values, information->answer);
+    auto callfront = new std::function<void()>(
+      [information, key, values]() {
+        *information->start_time = Clock::now();
+        SerializeRow(*values, information->answer);
+      });
     auto callback = new std::function<void()>(
       [information, key]() {
         *information->end_time = Clock::now();
         information->total_complete_num->fetch_add(1);
       });
-    elastic_db_->Put(write_options_, *key, information->answer, callback);
+    elastic_db_->Put(write_options_, *key, information->answer, callfront, callback);
     return kOK;
   }
   else
@@ -608,12 +644,16 @@ DB::Status ElasticDB::InsertSingle(const std::string &table, std::shared_ptr<std
 DB::Status ElasticDB::DeleteSingle(const std::string &table, std::shared_ptr<std::string> key,std::shared_ptr<Information> information) {
   if(async_test)
   {
+    auto callfront = new std::function<void()>(
+      [information, key]() {
+        *information->start_time = Clock::now();
+      });
     auto callback = new std::function<void()>(
       [information, key]() {
         *information->end_time = Clock::now();
         information->total_complete_num->fetch_add(1);
       });
-    rocksdb::Status s = elastic_db_->Delete(write_options_, *key, callback);
+    rocksdb::Status s = elastic_db_->Delete(write_options_, *key, callfront, callback);
     if (!s.ok()) {
       throw utils::Exception(std::string("RocksDB Delete: ") + s.ToString());
     }
