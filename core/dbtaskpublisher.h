@@ -331,7 +331,7 @@ namespace ycsbc
           //  (*(DBList[0])).CleanUpDirectly();
           //}
           timer.End();
-          std::cout << "Loading thread throughput" << index<< ": " << thread_total / timer.End()  << " ops/sec, target: " << task_per_second / producer_thread_num << std::endl;
+          std::cout << "Loading thread throughput" << index<< ": " << thread_total / timer.End() << " ops/sec at:" << timer.End() << ", target: " << task_per_second / producer_thread_num << std::endl;
         }
         else
         {
@@ -395,7 +395,7 @@ namespace ycsbc
           //  (*(DBList[0])).CleanUpDirectly();
           //}
           timer.End();
-          std::cout << "Loading thread throughput" << index<< ": " << thread_total / timer.End()  << " ops/sec, target: " << task_per_second / producer_thread_num << std::endl;
+          std::cout << "Loading thread throughput" << index<< ": " << thread_total / timer.End()  << " ops/sec at:" << timer.End() << ", target: " << task_per_second / producer_thread_num << std::endl;
         }
         if (!async_test)
         {

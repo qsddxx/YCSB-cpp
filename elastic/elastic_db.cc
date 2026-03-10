@@ -120,6 +120,9 @@ namespace {
   const std::string PROP_FS_URI = "elastic.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
+  const std::string PROP_LEVEL_SEGMENT_MAX_SORTED_RUN_NUM = "elastic.level_segment_max_sorted_run_num";
+  const std::string PROP_LEVEL_SEGMENT_MAX_SORTED_RUN_NUM_DEFAULT = "4";
+
   const std::string PROP_LEVEL_SEGMENT_MAX_FILE_NUM = "elastic.level_segment_max_file_num";
   const std::string PROP_LEVEL_SEGMENT_MAX_FILE_NUM_DEFAULT = "4,2,5,5,5,5,5";
 
@@ -426,6 +429,8 @@ void ElasticDB::GetElasticOptions(const utils::Properties &props, rocksdb::Elast
       props.GetProperty(COMPACTION_MORSEL_SIZE, COMPACTION_MORSEL_SIZE_DEFAULT));
   elastic_options->tp_morsel_size = std::stoi(
       props.GetProperty(TP_MORSEL_SIZE, TP_MORSEL_SIZE_DEFAULT));
+  elastic_options->level_segment_max_sorted_run_num = std::stoi(
+      props.GetProperty(PROP_LEVEL_SEGMENT_MAX_SORTED_RUN_NUM, PROP_LEVEL_SEGMENT_MAX_SORTED_RUN_NUM_DEFAULT));
   elastic_options->level_segment_max_file_num = ParseLevelSegmentMaxFileNum(
       props.GetProperty(PROP_LEVEL_SEGMENT_MAX_FILE_NUM, PROP_LEVEL_SEGMENT_MAX_FILE_NUM_DEFAULT));
 }
@@ -567,36 +572,13 @@ DB::Status ElasticDB::UpdateSingle(const std::string &table, std::shared_ptr<std
                                    std::shared_ptr<std::vector<Field>> values,std::shared_ptr<Information> information) {
   if(async_test)
   {
-    auto callfront = new std::function<void()>(
-      [information, key]() {
-        *information->start_time = Clock::now();
-      });
-    auto midcallback = new std::function<bool()>(
-      [information, values, this]() {
-        // std::vector<Field> current_values;
-        // // DeserializeRow(current_values, information->answer);
-        // assert(current_values.size() == static_cast<size_t>(fieldcount_));
-        // for (Field &new_field : (*values)) {
-        //   bool found MAYBE_UNUSED = false;
-        //   for (Field &cur_field : current_values) {
-        //     if (cur_field.name == new_field.name) {
-        //       found = true;
-        //       cur_field.value = new_field.value;
-        //       break;
-        //     }
-        //   }
-        //   assert(found);
-        // }
-        // information->answer.clear();
-        SerializeRow(*values, information->answer);
-        return true;
-      });
-    auto callbackend = new std::function<void()>(
-        [information, key]() {
-          *information->end_time = Clock::now();
-          information->total_complete_num->fetch_add(1);
-        });
-    rocksdb::Status s = elastic_db_->Update(read_options_, write_options_, *key, &information->answer, callfront, midcallback, callbackend);
+    rocksdb::Status s = elastic_db_->Update(read_options_, write_options_, *key, &information->answer,
+                                            reinterpret_cast<std::vector<rocksdb::Field> *>(values.get()),
+                                            information->start_time,
+                                            information->end_time,
+                                            information->total_complete_num,
+                                            information,
+                                            values);
     return kOK;
   }
   else

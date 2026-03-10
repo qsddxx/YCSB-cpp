@@ -280,12 +280,12 @@ int main(const int argc, const char *argv[])
     while (task_publisher.total_complete_num.load() != total_ops)
     {
       // measurements->SetTaskNum(task_publisher.TaskList.size());
-      usleep(1000000);
+      usleep(1000);
     }
+    double runtime = timer.End();
     task_publisher.FinishReport(status_interval);
     sum = task_publisher.total_complete_num.load();
     latch.NotifyAll();
-    double runtime = timer.End();
 
     if (show_status)
     {
@@ -375,12 +375,12 @@ int main(const int argc, const char *argv[])
     while (task_publisher.total_complete_num.load() != total_ops)
     {
       // measurements->SetTaskNum(task_publisher.TaskList.size());
-      usleep(100000);
+      usleep(1000);
     }
+    double runtime = timer.End();
     task_publisher.FinishReport(status_interval);
     sum = task_publisher.total_complete_num.load();
     latch.NotifyAll();
-    double runtime = timer.End();
 
     if (show_status)
     {
